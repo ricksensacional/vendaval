@@ -1,0 +1,63 @@
+import time
+import requests
+import RPi.GPIO as GPIO
+
+class Anemometro:
+    def _init_(self, porta_GPIO):
+        self.porta_GPIO = porta_GPIO
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(self.porta_GPIO, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.add_event_detect(self.porta_GPIO, GPIO.FALLING, callback=self.contar_pulso, bouncetime=10)
+        self.contador_pulsos = 0
+        self.fator_calibracao = 2.4  
+        self.limite_vendaval = 75 * 0.27778  # Convertendo 75 km/h para m/s
+
+    def contar_pulso(self, channel):
+        self.contador_pulsos += 1
+
+    def ler_velocidade_vento(self):
+        try:
+            pulsos = self.contador_pulsos
+            self.contador_pulsos = 0
+            velocidade_vento = (pulsos / 60) * self.fator_calibracao  # Pulsos por minuto para m/s
+            return velocidade_vento
+        except ValueError:
+            print("Erro ao converter a velocidade do vento para float.")
+            return None
+        except Exception as e:
+            print(f"Erro ao ler a velocidade do vento: {e}")
+            return None
+
+    def verifica_vendaval(self, velocidade_vento):
+        if velocidade_vento is not None:
+            return velocidade_vento > self.limite_ventania
+        return False
+
+class Middleware:
+    def _init_(self, url_nifi):
+        self.url_nifi = url_nifi
+
+    def enviar_alerta(self, mensagem):
+        headers = {'Content-Type': 'text/plain'}
+        try:
+            response = requests.post(self.url_nifi, data=mensagem, headers=headers)
+            if response.status_code == 200:
+                print("Alerta enviado com sucesso!")
+            else:
+                print(f"Falha ao enviar alerta. Código de status: {response.status_code}")
+        except Exception as e:
+            print(f"Erro ao enviar alerta: {e}")
+
+url_nifi = "https://localhost:8443/nifi/"
+anemometro = Anemometro(18)  # Usando GPIO 18 - Pino Físico 12
+middleware = Middleware(url_nifi)
+
+try:
+    while True:
+        velocidade_vento = anemometro.ler_velocidade_vento()
+        if anemometro.verifica_ventania(velocidade_vento):
+            mensagem = f"Vendaval detectado! Velocidade do vento: {velocidade_vento:.2f} m/s"
+            middleware.enviar_alerta(mensagem)
+        time.sleep(60)  
+finally:
+    GPIO.cleanup()
